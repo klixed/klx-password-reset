@@ -131,8 +131,8 @@ const SUPABASE_ANON_KEY = 'sb_publishable_lpDXbSNBXT-ghuFA-2YwrQ_NuA3ztzw';
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
     detectSessionInUrl: true,
-    flowType: 'pkce',
-    persistSession: false,
+    persistSession: true,
+    autoRefreshToken: true,
   },
 });
 
@@ -145,6 +145,56 @@ function show(msg, type) {
   statusEl.className = 'status ' + type;
   statusEl.style.display = 'block';
 }
+
+let recoveryReady = false;
+function markReady() {
+  if (recoveryReady) return;
+  recoveryReady = true;
+  form.style.display = '';
+}
+
+// The SDK fires PASSWORD_RECOVERY after it processes the email link's hash.
+supabase.auth.onAuthStateChange((event, session) => {
+  if (event === 'PASSWORD_RECOVERY' || (event === 'SIGNED_IN' && session)) {
+    markReady();
+  }
+});
+
+// Manual fallback: if the URL carried tokens in the hash, parse and inject.
+async function hydrateFromHashOrQuery() {
+  // Hash flow: #access_token=…&refresh_token=…&type=recovery
+  if (window.location.hash && window.location.hash.length > 1) {
+    const h = new URLSearchParams(window.location.hash.slice(1));
+    const access_token  = h.get('access_token');
+    const refresh_token = h.get('refresh_token');
+    if (access_token && refresh_token) {
+      const { error } = await supabase.auth.setSession({ access_token, refresh_token });
+      if (!error) { markReady(); return; }
+    }
+  }
+  // PKCE flow: ?code=…
+  const q = new URLSearchParams(window.location.search);
+  if (q.get('code')) {
+    const { error } = await supabase.auth.exchangeCodeForSession(q.get('code'));
+    if (!error) { markReady(); return; }
+  }
+  // No tokens anywhere → maybe the SDK already set a session asynchronously
+  const { data } = await supabase.auth.getSession();
+  if (data?.session) markReady();
+}
+
+// Hide the form until we know we have a recovery session.
+form.style.display = 'none';
+hydrateFromHashOrQuery();
+
+setTimeout(() => {
+  if (!recoveryReady) {
+    show(
+      'This reset link is invalid or has expired. Request a new password-reset email and try again.',
+      'error'
+    );
+  }
+}, 2500);
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
