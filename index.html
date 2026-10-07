@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Reset Password · KLX Trade Tracker</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { height: 100%; }
+  body {
+    background: #0b1120;
+    color: #f1f5f9;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    margin: 0;
+    padding: 20px;
+    box-sizing: border-box;
+  }
+  .card {
+    background: #1e293b;
+    padding: 32px;
+    border-radius: 16px;
+    max-width: 400px;
+    width: 100%;
+    border: 1px solid #334155;
+    box-sizing: border-box;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  }
+  .logo {
+    color: #dc2626;
+    font-size: 48px;
+    font-weight: 900;
+    text-align: center;
+    margin: 0;
+    letter-spacing: 2px;
+  }
+  .subtitle {
+    color: #94a3b8;
+    text-align: center;
+    margin: 4px 0 28px;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  h2 {
+    color: #f1f5f9;
+    font-size: 20px;
+    margin: 0 0 20px;
+    font-weight: 700;
+  }
+  label {
+    color: #94a3b8;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 700;
+    display: block;
+    margin-bottom: 6px;
+    margin-top: 12px;
+  }
+  input {
+    width: 100%;
+    padding: 12px 14px;
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 10px;
+    color: #f1f5f9;
+    font-size: 16px;
+    box-sizing: border-box;
+  }
+  input:focus {
+    outline: none;
+    border-color: #dc2626;
+    box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.2);
+  }
+  button {
+    width: 100%;
+    padding: 14px;
+    background: #dc2626;
+    color: white;
+    border: none;
+    border-radius: 10px;
+    font-size: 16px;
+    font-weight: 800;
+    cursor: pointer;
+    margin-top: 24px;
+    letter-spacing: 0.5px;
+  }
+  button:hover { background: #b91c1c; }
+  button:disabled { opacity: 0.6; cursor: not-allowed; }
+  .status {
+    margin-top: 16px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    font-size: 13px;
+    line-height: 1.4;
+  }
+  .error {
+    background: rgba(239, 68, 68, 0.15);
+    color: #fca5a5;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+  }
+  .success {
+    background: rgba(34, 197, 94, 0.15);
+    color: #86efac;
+    border: 1px solid rgba(34, 197, 94, 0.3);
+  }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">KLX</div>
+  <div class="subtitle">Trade Tracker</div>
+  <h2>Reset your password</h2>
+  <form id="form">
+    <label for="pw">New Password</label>
+    <input type="password" id="pw" placeholder="At least 6 characters" required minlength="6" autocomplete="new-password" />
+    <label for="confirm">Confirm Password</label>
+    <input type="password" id="confirm" placeholder="Repeat your password" required minlength="6" autocomplete="new-password" />
+    <button type="submit" id="submit">Reset Password</button>
+  </form>
+  <div id="status" style="display:none"></div>
+</div>
+<script type="module">
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
+const SUPABASE_URL = 'https://lydlytnkvrwsjzipjphm.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_lpDXbSNBXT-ghuFA-2YwrQ_NuA3ztzw';
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: {
+    detectSessionInUrl: true,
+    flowType: 'pkce',
+    persistSession: false,
+  },
+});
+
+const statusEl = document.getElementById('status');
+const form     = document.getElementById('form');
+const submit   = document.getElementById('submit');
+
+function show(msg, type) {
+  statusEl.textContent = msg;
+  statusEl.className = 'status ' + type;
+  statusEl.style.display = 'block';
+}
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const pw      = document.getElementById('pw').value;
+  const confirm = document.getElementById('confirm').value;
+  if (pw !== confirm) { show('Passwords do not match.', 'error'); return; }
+
+  submit.disabled = true;
+  submit.textContent = 'Updating…';
+  try {
+    const { error } = await supabase.auth.updateUser({ password: pw });
+    if (error) throw error;
+    show('Password updated. Open the KLX app and sign in with your new password.', 'success');
+    form.style.display = 'none';
+  } catch (err) {
+    show(err.message || 'Something went wrong. The link may have expired — request another reset email.', 'error');
+    submit.disabled = false;
+    submit.textContent = 'Reset Password';
+  }
+});
+</script>
+</body>
+</html>
