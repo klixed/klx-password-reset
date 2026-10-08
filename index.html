@@ -359,8 +359,12 @@ form.addEventListener('submit', async (e) => {
         const { data: ok, error: rErr } = await supabase.rpc('use_mfa_backup_code', { p_code: clean });
         if (rErr) throw rErr;
         if (ok !== true) throw new Error('That backup code is invalid or has already been used.');
-        // Remove the TOTP factor so AAL drops and the user can finish the reset.
-        try { await supabase.auth.mfa.unenroll({ factorId: totpFactor.id }); } catch (e) { console.warn('unenroll failed', e); }
+        // The RPC also deletes the user's MFA factor server-side (see
+        // migrate_v6.sql) so the server no longer demands AAL2 on this
+        // recovery session. Refresh the client session so the SDK's cached
+        // factor list is empty before we call updateUser.
+        try { await supabase.auth.refreshSession(); } catch (e) { console.warn('refreshSession failed', e); }
+        totpFactor = null;
       } catch (err) {
         show(err.message || "That code didn't work.", 'error');
         submit.disabled = false;
