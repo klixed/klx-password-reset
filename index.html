@@ -106,13 +106,34 @@
     color: #86efac;
     border: 1px solid rgba(34, 197, 94, 0.3);
   }
+  .account {
+    background: rgba(220, 38, 38, 0.08);
+    border: 1px solid rgba(220, 38, 38, 0.3);
+    border-radius: 10px;
+    padding: 10px 14px;
+    margin: 0 0 20px;
+    font-size: 13px;
+    color: #cbd5e1;
+    line-height: 1.5;
+  }
+  .account .label {
+    color: #94a3b8;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 700;
+    display: block;
+    margin-bottom: 2px;
+  }
+  .account strong { color: #f1f5f9; font-weight: 700; }
 </style>
 </head>
 <body>
 <div class="card">
   <div class="logo">KLX</div>
   <div class="subtitle">Trade Tracker</div>
-  <h2>Reset your password</h2>
+  <h2 id="greeting">Reset your password</h2>
+  <div id="account" class="account" style="display:none"></div>
   <form id="form">
     <label for="pw">New Password</label>
     <input type="password" id="pw" placeholder="At least 6 characters" required minlength="6" autocomplete="new-password" />
@@ -136,9 +157,11 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   },
 });
 
-const statusEl = document.getElementById('status');
-const form     = document.getElementById('form');
-const submit   = document.getElementById('submit');
+const statusEl   = document.getElementById('status');
+const form       = document.getElementById('form');
+const submit     = document.getElementById('submit');
+const greetingEl = document.getElementById('greeting');
+const accountEl  = document.getElementById('account');
 
 function show(msg, type) {
   statusEl.textContent = msg;
@@ -146,11 +169,41 @@ function show(msg, type) {
   statusEl.style.display = 'block';
 }
 
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+// Personalize the heading + show the account the link belongs to so the user
+// can confirm they're resetting the right one.
+async function personalize() {
+  try {
+    const { data } = await supabase.auth.getUser();
+    const u = data?.user;
+    if (!u) return;
+    const metaName = u.user_metadata?.username;
+    const emailName = u.email ? u.email.split('@')[0] : null;
+    const name = metaName || emailName || 'there';
+    const synth = (u.email || '').endsWith('@klx-trader.local');
+    greetingEl.textContent = `Hi ${name}, let's reset your password.`;
+    accountEl.innerHTML = `
+      <span class="label">Account</span>
+      <strong>${esc(name)}</strong>${synth ? '' : ` &middot; ${esc(u.email)}`}
+    `;
+    accountEl.style.display = 'block';
+  } catch (err) {
+    // Non-fatal — the page just stays generic.
+    console.warn('personalize failed', err);
+  }
+}
+
 let recoveryReady = false;
 function markReady() {
   if (recoveryReady) return;
   recoveryReady = true;
   form.style.display = '';
+  personalize();
 }
 
 // The SDK fires PASSWORD_RECOVERY after it processes the email link's hash.
@@ -207,7 +260,9 @@ form.addEventListener('submit', async (e) => {
   try {
     const { error } = await supabase.auth.updateUser({ password: pw });
     if (error) throw error;
-    show('Password updated. Open the KLX app and sign in with your new password.', 'success');
+    const { data } = await supabase.auth.getUser();
+    const who = data?.user?.user_metadata?.username || data?.user?.email?.split('@')[0] || 'you';
+    show(`All set — your new password is active, ${who}. Open the KLX app and sign in.`, 'success');
     form.style.display = 'none';
   } catch (err) {
     show(err.message || 'Something went wrong. The link may have expired — request another reset email.', 'error');
