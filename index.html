@@ -138,6 +138,20 @@
     margin: 6px 0 0;
     line-height: 1.4;
   }
+  .mfaToggle {
+    display: inline-block;
+    margin-top: 10px;
+    color: #dc2626;
+    font-size: 12px;
+    font-weight: 700;
+    text-decoration: none;
+  }
+  .mfaToggle:hover { text-decoration: underline; }
+  .backupMode .mfaInput {
+    font-size: 18px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
 </style>
 </head>
 <body>
@@ -148,9 +162,10 @@
   <div id="account" class="account" style="display:none"></div>
   <form id="form">
     <div id="mfaBlock" style="display:none">
-      <label for="mfa">Authenticator code</label>
+      <label id="mfaLabel" for="mfa">Authenticator code</label>
       <input type="text" id="mfa" placeholder="123456" inputmode="numeric" autocomplete="one-time-code" maxlength="6" class="mfaInput" />
-      <p class="mfaHint">This account has two-factor enabled. Enter the current 6-digit code from your authenticator app.</p>
+      <p id="mfaHint" class="mfaHint">This account has two-factor enabled. Enter the current 6-digit code from your authenticator app.</p>
+      <a href="#" id="mfaToggle" class="mfaToggle">Don't have access to your authenticator? Use a backup code</a>
     </div>
     <label for="pw">New Password</label>
     <input type="password" id="pw" placeholder="At least 6 characters" required minlength="6" autocomplete="new-password" />
@@ -180,9 +195,44 @@ const submit     = document.getElementById('submit');
 const greetingEl = document.getElementById('greeting');
 const accountEl  = document.getElementById('account');
 const mfaBlock   = document.getElementById('mfaBlock');
+const mfaLabel   = document.getElementById('mfaLabel');
 const mfaInput   = document.getElementById('mfa');
+const mfaHint    = document.getElementById('mfaHint');
+const mfaToggle  = document.getElementById('mfaToggle');
 
 let totpFactor = null; // populated when the account has verified TOTP
+let mfaMode    = 'totp'; // 'totp' | 'backup'
+
+function setMfaMode(mode) {
+  mfaMode = mode;
+  if (mode === 'backup') {
+    mfaBlock.classList.add('backupMode');
+    mfaLabel.textContent = 'Backup code';
+    mfaInput.value = '';
+    mfaInput.setAttribute('maxlength', '11');
+    mfaInput.setAttribute('inputmode', 'text');
+    mfaInput.setAttribute('autocomplete', 'off');
+    mfaInput.setAttribute('placeholder', 'XXXXX XXXXX');
+    mfaHint.textContent = 'Enter one of the 10-character recovery codes you saved when you set up 2FA. The code will be used up and 2FA will be removed from your account.';
+    mfaToggle.textContent = 'I have my authenticator code — go back';
+  } else {
+    mfaBlock.classList.remove('backupMode');
+    mfaLabel.textContent = 'Authenticator code';
+    mfaInput.value = '';
+    mfaInput.setAttribute('maxlength', '6');
+    mfaInput.setAttribute('inputmode', 'numeric');
+    mfaInput.setAttribute('autocomplete', 'one-time-code');
+    mfaInput.setAttribute('placeholder', '123456');
+    mfaHint.textContent = 'This account has two-factor enabled. Enter the current 6-digit code from your authenticator app.';
+    mfaToggle.textContent = "Don't have access to your authenticator? Use a backup code";
+  }
+  mfaInput.focus();
+}
+
+mfaToggle.addEventListener('click', (e) => {
+  e.preventDefault();
+  setMfaMode(mfaMode === 'totp' ? 'backup' : 'totp');
+});
 
 function show(msg, type) {
   statusEl.textContent = msg;
@@ -291,31 +341,55 @@ form.addEventListener('submit', async (e) => {
   if (pw !== confirm) { show('Passwords do not match.', 'error'); return; }
 
   // If TOTP is enrolled we require the user to prove it before changing the
-  // password. Loss of password + loss of authenticator = genuine lockout, which
-  // is the intended behaviour of two-factor.
+  // password. Loss of password + loss of authenticator + loss of backup codes
+  // is a genuine lockout — that's intended behaviour of two-factor.
   if (totpFactor) {
-    const code = (mfaInput.value || '').trim();
-    if (!/^\d{6}$/.test(code)) {
-      show('Enter the 6-digit code from your authenticator app.', 'error');
-      mfaInput.focus();
-      return;
-    }
-    submit.disabled = true;
-    submit.textContent = 'Verifying code…';
-    try {
-      const { data: ch, error: cErr } = await supabase.auth.mfa.challenge({ factorId: totpFactor.id });
-      if (cErr) throw cErr;
-      const { error: vErr } = await supabase.auth.mfa.verify({
-        factorId: totpFactor.id,
-        challengeId: ch.id,
-        code,
-      });
-      if (vErr) throw new Error('Invalid authenticator code.');
-    } catch (err) {
-      show(err.message || 'That code didn\'t work. Try the next one from your app.', 'error');
-      submit.disabled = false;
-      submit.textContent = 'Reset Password';
-      return;
+    const raw = (mfaInput.value || '').trim();
+    if (mfaMode === 'backup') {
+      // 10-char hex code (allow a single space between the two halves).
+      const clean = raw.toUpperCase().replace(/\s+/g, '');
+      if (!/^[0-9A-F]{10}$/.test(clean)) {
+        show('Enter a 10-character backup code (letters A–F and digits).', 'error');
+        mfaInput.focus();
+        return;
+      }
+      submit.disabled = true;
+      submit.textContent = 'Checking code…';
+      try {
+        const { data: ok, error: rErr } = await supabase.rpc('use_mfa_backup_code', { p_code: clean });
+        if (rErr) throw rErr;
+        if (ok !== true) throw new Error('That backup code is invalid or has already been used.');
+        // Remove the TOTP factor so AAL drops and the user can finish the reset.
+        try { await supabase.auth.mfa.unenroll({ factorId: totpFactor.id }); } catch (e) { console.warn('unenroll failed', e); }
+      } catch (err) {
+        show(err.message || "That code didn't work.", 'error');
+        submit.disabled = false;
+        submit.textContent = 'Reset Password';
+        return;
+      }
+    } else {
+      if (!/^\d{6}$/.test(raw)) {
+        show('Enter the 6-digit code from your authenticator app.', 'error');
+        mfaInput.focus();
+        return;
+      }
+      submit.disabled = true;
+      submit.textContent = 'Verifying code…';
+      try {
+        const { data: ch, error: cErr } = await supabase.auth.mfa.challenge({ factorId: totpFactor.id });
+        if (cErr) throw cErr;
+        const { error: vErr } = await supabase.auth.mfa.verify({
+          factorId: totpFactor.id,
+          challengeId: ch.id,
+          code: raw,
+        });
+        if (vErr) throw new Error('Invalid authenticator code.');
+      } catch (err) {
+        show(err.message || "That code didn't work. Try the next one from your app.", 'error');
+        submit.disabled = false;
+        submit.textContent = 'Reset Password';
+        return;
+      }
     }
   }
 
@@ -326,7 +400,10 @@ form.addEventListener('submit', async (e) => {
     if (error) throw error;
     const { data } = await supabase.auth.getUser();
     const who = data?.user?.user_metadata?.username || data?.user?.email?.split('@')[0] || 'you';
-    show(`All set — your new password is active, ${who}. Open the KLX app and sign in.`, 'success');
+    const extra = mfaMode === 'backup'
+      ? " Your 2FA has been removed — re-enable it from Menu → Account once you're back in."
+      : '';
+    show(`All set — your new password is active, ${who}. Open the KLX app and sign in.${extra}`, 'success');
     form.style.display = 'none';
   } catch (err) {
     show(err.message || 'Something went wrong. The link may have expired — request another reset email.', 'error');
