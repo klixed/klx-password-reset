@@ -126,6 +126,18 @@
     margin-bottom: 2px;
   }
   .account strong { color: #f1f5f9; font-weight: 700; }
+  .mfaInput {
+    font-size: 22px;
+    letter-spacing: 8px;
+    text-align: center;
+    font-family: monospace;
+  }
+  .mfaHint {
+    color: #94a3b8;
+    font-size: 12px;
+    margin: 6px 0 0;
+    line-height: 1.4;
+  }
 </style>
 </head>
 <body>
@@ -135,6 +147,11 @@
   <h2 id="greeting">Reset your password</h2>
   <div id="account" class="account" style="display:none"></div>
   <form id="form">
+    <div id="mfaBlock" style="display:none">
+      <label for="mfa">Authenticator code</label>
+      <input type="text" id="mfa" placeholder="123456" inputmode="numeric" autocomplete="one-time-code" maxlength="6" class="mfaInput" />
+      <p class="mfaHint">This account has two-factor enabled. Enter the current 6-digit code from your authenticator app.</p>
+    </div>
     <label for="pw">New Password</label>
     <input type="password" id="pw" placeholder="At least 6 characters" required minlength="6" autocomplete="new-password" />
     <label for="confirm">Confirm Password</label>
@@ -162,6 +179,10 @@ const form       = document.getElementById('form');
 const submit     = document.getElementById('submit');
 const greetingEl = document.getElementById('greeting');
 const accountEl  = document.getElementById('account');
+const mfaBlock   = document.getElementById('mfaBlock');
+const mfaInput   = document.getElementById('mfa');
+
+let totpFactor = null; // populated when the account has verified TOTP
 
 function show(msg, type) {
   statusEl.textContent = msg;
@@ -176,7 +197,9 @@ function esc(s) {
 }
 
 // Personalize the heading + show the account the link belongs to so the user
-// can confirm they're resetting the right one.
+// can confirm they're resetting the right one. Also pre-check whether the
+// account has TOTP MFA enrolled — if so, reveal the authenticator-code field
+// which is required before the password can change.
 async function personalize() {
   try {
     const { data } = await supabase.auth.getUser();
@@ -195,6 +218,18 @@ async function personalize() {
   } catch (err) {
     // Non-fatal — the page just stays generic.
     console.warn('personalize failed', err);
+  }
+
+  try {
+    const { data: factors } = await supabase.auth.mfa.listFactors();
+    const all = factors?.all || factors?.totp || [];
+    const totp = all.find((f) => f.factor_type === 'totp' && f.status === 'verified');
+    if (totp) {
+      totpFactor = totp;
+      mfaBlock.style.display = '';
+    }
+  } catch (err) {
+    console.warn('MFA listFactors failed', err);
   }
 }
 
@@ -254,6 +289,35 @@ form.addEventListener('submit', async (e) => {
   const pw      = document.getElementById('pw').value;
   const confirm = document.getElementById('confirm').value;
   if (pw !== confirm) { show('Passwords do not match.', 'error'); return; }
+
+  // If TOTP is enrolled we require the user to prove it before changing the
+  // password. Loss of password + loss of authenticator = genuine lockout, which
+  // is the intended behaviour of two-factor.
+  if (totpFactor) {
+    const code = (mfaInput.value || '').trim();
+    if (!/^\d{6}$/.test(code)) {
+      show('Enter the 6-digit code from your authenticator app.', 'error');
+      mfaInput.focus();
+      return;
+    }
+    submit.disabled = true;
+    submit.textContent = 'Verifying code…';
+    try {
+      const { data: ch, error: cErr } = await supabase.auth.mfa.challenge({ factorId: totpFactor.id });
+      if (cErr) throw cErr;
+      const { error: vErr } = await supabase.auth.mfa.verify({
+        factorId: totpFactor.id,
+        challengeId: ch.id,
+        code,
+      });
+      if (vErr) throw new Error('Invalid authenticator code.');
+    } catch (err) {
+      show(err.message || 'That code didn\'t work. Try the next one from your app.', 'error');
+      submit.disabled = false;
+      submit.textContent = 'Reset Password';
+      return;
+    }
+  }
 
   submit.disabled = true;
   submit.textContent = 'Updating…';
